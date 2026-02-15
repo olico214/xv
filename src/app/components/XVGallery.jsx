@@ -9,22 +9,25 @@ import HeroBanner from './HeroBanner';
 const API_URL = 'https://server-images.soiteg.com';
 
 export default function XVGallery() {
-    // --- DATOS ---
+    // --- ESTADOS DE DATOS ---
     const [images, setImages] = useState([]);
     const [categories, setCategories] = useState([]);
     const [selectedCategory, setSelectedCategory] = useState('all');
 
-    // --- UI ---
+    // --- ESTADOS DE UI (MODAL & CHAT) ---
     const [modalIndex, setModalIndex] = useState(null);
     const [comments, setComments] = useState([]);
     const [newComment, setNewComment] = useState("");
     const [authorName, setAuthorName] = useState("");
+    const [isSheetOpen, setIsSheetOpen] = useState(false); // Para el chat en móvil
 
-    // Control del Sheet Móvil
-    const [isSheetOpen, setIsSheetOpen] = useState(false);
-
+    // --- ESTADOS DE GESTIÓN (SELECCIÓN & UPLOAD) ---
     const [selectedForZip, setSelectedForZip] = useState(new Set());
     const [isSelectionMode, setIsSelectionMode] = useState(false);
+
+    // Estado para subida masiva
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 
     const commentsEndRef = useRef(null);
 
@@ -32,35 +35,42 @@ export default function XVGallery() {
     useEffect(() => { fetchCategories(); }, []);
     useEffect(() => { fetchImages(); }, [selectedCategory]);
 
+    // Control del Modal y Scroll del Body
     useEffect(() => {
         if (modalIndex !== null) {
             const imgId = images[modalIndex].id;
             fetchComments(imgId);
-            setIsSheetOpen(false); // Empezar con chat cerrado
-            document.body.style.overflow = 'hidden'; // Bloquear scroll del fondo
+            setIsSheetOpen(false); // Empezar con chat cerrado en móvil
+            document.body.style.overflow = 'hidden'; // Bloquear scroll de fondo
         } else {
             document.body.style.overflow = 'unset'; // Desbloquear scroll
         }
-    }, [modalIndex]);
+    }, [modalIndex]); // Dependencia simplificada para evitar loops
 
+    // Scroll automático al último comentario
     useEffect(() => {
-        if (isSheetOpen) commentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        if (isSheetOpen || modalIndex !== null) {
+            commentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
     }, [comments, isSheetOpen]);
 
-    // --- API CALLS (Igual que antes) ---
-    const fetchCategories = async () => { /* ... */
+    // --- API CALLS ---
+    const fetchCategories = async () => {
         try { const res = await fetch(`${API_URL}/categories`); setCategories(await res.json()); } catch (e) { }
     };
-    const fetchImages = async () => { /* ... */
+
+    const fetchImages = async () => {
         try { const res = await fetch(`${API_URL}/images?category_id=${selectedCategory}`); setImages(await res.json()); } catch (e) { }
     };
-    const fetchComments = async (imgId) => { /* ... */
+
+    const fetchComments = async (imgId) => {
         try { const res = await fetch(`${API_URL}/images/${imgId}/comments`); setComments(await res.json()); } catch (e) { }
     };
 
     const postComment = async (e) => {
         e.preventDefault();
         if (!newComment.trim()) return;
+
         const imgId = images[modalIndex].id;
         try {
             const res = await fetch(`${API_URL}/images/${imgId}/comments`, {
@@ -73,7 +83,7 @@ export default function XVGallery() {
                 setComments(prev => [data.comment, ...prev]);
                 setNewComment("");
             }
-        } catch (e) { alert("Error al comentar"); }
+        } catch (e) { alert("Error al conectar"); }
     };
 
     const toggleEditRequest = async (imgId) => {
@@ -93,7 +103,48 @@ export default function XVGallery() {
         setImages(prev => prev.map(img => img.id === id ? { ...img, ...newProps } : img));
     };
 
-    // --- UTILS ---
+    // --- SUBIDA MASIVA POR LOTES (BATCH UPLOAD) ---
+    const handleUpload = async (e) => {
+        const allFiles = Array.from(e.target.files);
+        if (allFiles.length === 0) return;
+
+        setIsUploading(true);
+        setUploadProgress({ current: 0, total: allFiles.length });
+
+        const BATCH_SIZE = 10; // Subir de 10 en 10
+        const totalBatches = Math.ceil(allFiles.length / BATCH_SIZE);
+
+        try {
+            for (let i = 0; i < totalBatches; i++) {
+                const start = i * BATCH_SIZE;
+                const end = start + BATCH_SIZE;
+                const batch = allFiles.slice(start, end);
+
+                const formData = new FormData();
+                batch.forEach(file => formData.append('images', file));
+                formData.append('category_id', selectedCategory === 'all' ? 1 : selectedCategory);
+
+                await fetch(`${API_URL}/upload`, { method: 'POST', body: formData });
+
+                // Actualizar progreso visual
+                setUploadProgress(prev => ({
+                    ...prev,
+                    current: Math.min(prev.total, end)
+                }));
+            }
+            alert("¡Carga completa! 🚀");
+            e.target.value = null;
+            fetchImages();
+        } catch (error) {
+            console.error(error);
+            alert("Hubo un error en la carga.");
+        } finally {
+            setIsUploading(false);
+            setUploadProgress({ current: 0, total: 0 });
+        }
+    };
+
+    // --- DESCARGA ZIP ---
     const toggleZipSelection = (imgId) => {
         const newSet = new Set(selectedForZip);
         newSet.has(imgId) ? newSet.delete(imgId) : newSet.add(imgId);
@@ -101,12 +152,12 @@ export default function XVGallery() {
     };
 
     const downloadZip = async () => {
-        /* ... Lógica de ZIP igual ... */
         if (selectedForZip.size === 0) return alert("Selecciona fotos primero");
         const zip = new JSZip();
         const folder = zip.folder("XV-Seleccion");
         const targets = images.filter(img => selectedForZip.has(img.id));
-        alert(`Preparando ${targets.length} fotos...`);
+        alert(`Comprimiendo ${targets.length} fotos...`);
+
         const promises = targets.map(async (img) => {
             const filename = img.url.split('/').pop();
             try {
@@ -115,50 +166,13 @@ export default function XVGallery() {
                 folder.file(filename, blob);
             } catch (e) { console.error(e); }
         });
+
         await Promise.all(promises);
         const content = await zip.generateAsync({ type: "blob" });
         saveAs(content, "mis-fotos-xv.zip");
     };
-    const [isUploading, setIsUploading] = useState(false); // Nuevo estado de carga
-    const handleUpload = async (e) => {
-        const files = e.target.files;
-        if (!files || files.length === 0) return;
 
-        // Feedback visual inmediato
-        setIsUploading(true);
-
-        const formData = new FormData();
-
-        // Recorremos los archivos seleccionados y los agregamos al FormData
-        // Nota: Usamos 'images' (plural) para coincidir con el backend
-        for (let i = 0; i < files.length; i++) {
-            formData.append('images', files[i]);
-        }
-
-        // Agregamos la categoría
-        formData.append('category_id', selectedCategory === 'all' ? 1 : selectedCategory);
-
-        try {
-            const res = await fetch(`${API_URL}/upload`, {
-                method: 'POST',
-                body: formData
-            });
-
-            if (res.ok) {
-                alert("¡Fotos subidas con éxito! 🚀");
-                e.target.value = null; // Limpiar el input
-                fetchImages(); // Recargar la galería
-            } else {
-                alert("Hubo un error al subir las fotos.");
-            }
-        } catch (error) {
-            console.error(error);
-            alert("Error de conexión.");
-        } finally {
-            setIsUploading(false); // Quitar spinner
-        }
-    };
-
+    // --- NAVEGACIÓN TECLADO ---
     const handleKeyDown = useCallback((e) => {
         if (modalIndex === null) return;
         if (e.key === 'ArrowRight') setModalIndex(prev => (prev + 1) % images.length);
@@ -179,8 +193,10 @@ export default function XVGallery() {
             <HeroBanner images={images.map(img => ({ ...img, url: `${API_URL}${img.url}` }))} />
 
             <div className="max-w-7xl mx-auto px-4 -mt-10 relative z-10">
-                {/* BARRA DE FILTROS */}
-                <div className="bg-white rounded-xl shadow-xl p-4 mb-8 flex flex-col md:flex-row gap-4 justify-between items-center sticky top-2 z-20">
+                {/* BARRA DE HERRAMIENTAS STICKY */}
+                <div className="bg-white rounded-xl shadow-xl p-4 mb-8 flex flex-col md:flex-row gap-4 justify-between items-center sticky top-2 z-20 border border-gray-100">
+
+                    {/* Filtros Categorías */}
                     <div className="flex gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-hide">
                         <button onClick={() => setSelectedCategory('all')} className={`px-4 py-2 rounded-full font-bold text-sm transition-all ${selectedCategory === 'all' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600'}`}>Todas</button>
                         {categories.map(cat => (
@@ -188,127 +204,109 @@ export default function XVGallery() {
                         ))}
                     </div>
 
-                    <div className="flex gap-3 w-full md:w-auto">
-                        <label className={`cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700 transition flex items-center gap-2 ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-
+                    {/* Botones de Acción */}
+                    <div className="flex gap-3 w-full md:w-auto items-center">
+                        <label className={`flex-1 md:flex-none text-center cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700 transition flex items-center justify-center gap-2 ${isUploading ? 'opacity-80 cursor-wait' : ''}`}>
                             {isUploading ? (
                                 <>
-                                    <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    Subiendo...
+                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                    <span className="text-xs">Subiendo {uploadProgress.current}/{uploadProgress.total}</span>
                                 </>
                             ) : (
                                 <>
-                                    Subir Fotos 📷
-                                    {/* AGREGADO EL ATRIBUTO MULTIPLE AQUÍ ABAJO */}
-                                    <input
-                                        type="file"
-                                        className="hidden"
-                                        onChange={handleUpload}
-                                        accept="image/*"
-                                        multiple
-                                        disabled={isUploading}
-                                    />
+                                    <span>Subir 📷</span>
+                                    <input type="file" className="hidden" onChange={handleUpload} accept="image/*" multiple disabled={isUploading} />
                                 </>
                             )}
                         </label>
+
                         <button onClick={() => setIsSelectionMode(!isSelectionMode)} className={`flex-1 md:flex-none px-4 py-2 border rounded-lg text-sm font-bold transition ${isSelectionMode ? 'bg-pink-50 border-pink-500 text-pink-700' : 'bg-white'}`}>
                             {isSelectionMode ? 'Cancelar' : 'Seleccionar'}
                         </button>
+
                         {isSelectionMode && selectedForZip.size > 0 && (
                             <button onClick={downloadZip} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold animate-pulse shadow-lg">
-                                Descargar ({selectedForZip.size})
+                                ⬇️ ({selectedForZip.size})
                             </button>
                         )}
                     </div>
                 </div>
 
-                {/* GRID */}
+                {/* GRID DE FOTOS */}
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
-                    {images.map((img, idx) => (
-                        <div key={img.id} onClick={() => isSelectionMode ? toggleZipSelection(img.id) : setModalIndex(idx)}
-                            className={`relative aspect-[3/4] group rounded-lg overflow-hidden cursor-pointer transition-all duration-300 shadow-sm
-                            ${selectedForZip.has(img.id) ? 'ring-4 ring-blue-500 scale-95' : ''} 
-                            ${img.is_requested ? 'ring-4 ring-green-500' : ''}
-                            ${img.is_deletion_requested ? 'grayscale opacity-60 ring-4 ring-red-500' : ''}
-                        `}>
-                            <Image
-                                src={`${API_URL}${img.url}`}
-                                alt="Foto XV" fill className="object-cover transition-transform duration-700 group-hover:scale-110"
-                                sizes="(max-width: 768px) 50vw, 25vw"
-                            />
-                            <div className="absolute top-2 right-2 flex flex-col gap-1 items-end z-10">
-                                {img.is_requested && <span className="bg-green-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md backdrop-blur-md">Edición ✅</span>}
-                                {img.is_deletion_requested && <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md backdrop-blur-md">Borrar 🗑️</span>}
+                    {images.map((img, idx) => {
+                        const isZipSelected = selectedForZip.has(img.id);
+                        return (
+                            <div key={img.id} onClick={() => isSelectionMode ? toggleZipSelection(img.id) : setModalIndex(idx)}
+                                className={`relative aspect-[3/4] group rounded-lg overflow-hidden cursor-pointer transition-all duration-300 shadow-sm hover:shadow-xl
+                                ${isZipSelected ? 'ring-4 ring-blue-500 scale-95' : ''} 
+                                ${img.is_requested ? 'ring-4 ring-green-500' : ''}
+                                ${img.is_deletion_requested ? 'grayscale opacity-60 ring-4 ring-red-500' : ''}
+                            `}>
+                                <Image
+                                    src={`${API_URL}${img.url}`}
+                                    alt="Foto XV" fill className="object-cover transition-transform duration-700 group-hover:scale-110"
+                                    sizes="(max-width: 768px) 50vw, 25vw"
+                                />
+                                {/* Badges */}
+                                <div className="absolute top-2 right-2 flex flex-col gap-1 items-end z-10">
+                                    {img.is_requested && <span className="bg-green-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md backdrop-blur-md">Edición ✅</span>}
+                                    {img.is_deletion_requested && <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md backdrop-blur-md">Borrar 🗑️</span>}
+                                    {isZipSelected && <span className="bg-blue-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md">Descargar</span>}
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
 
-            {/* ============================================== */}
-            {/* MODAL FULLSCREEN (MÓVIL)           */}
-            {/* ============================================== */}
+            {/* --- MODAL / LIGHTBOX (Responsive) --- */}
             {modalImage && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black">
 
-                    {/* CONTENEDOR PRINCIPAL: Usa 'dvh' para adaptarse a móviles */}
+                    {/* Contenedor Principal Adaptable */}
                     <div className="relative w-full h-[100dvh] md:h-[90vh] md:max-w-6xl md:rounded-xl md:bg-black md:flex md:flex-row overflow-hidden">
 
-                        {/* --- 1. CAPA DE IMAGEN --- */}
+                        {/* 1. SECCIÓN IMAGEN */}
                         <div className="relative w-full h-full md:w-2/3 bg-black flex items-center justify-center">
 
-                            {/* IMAGEN: Ajuste responsivo */}
+                            {/* Imagen con ajuste de altura dinámica en móvil */}
                             <div className={`relative w-full h-full transition-all duration-300 ${isSheetOpen ? 'h-[40%] opacity-50' : 'h-full opacity-100'} md:h-full md:opacity-100`}>
                                 <Image
                                     src={`${API_URL}${modalImage.url}`}
-                                    alt="Full View"
-                                    fill
-                                    className="object-contain"
-                                    priority
-                                    onClick={() => setIsSheetOpen(false)} // Click en foto cierra chat
+                                    alt="Full View" fill className="object-contain" priority
+                                    onClick={() => setIsSheetOpen(false)} // Click cierra chat móvil
                                 />
                             </div>
 
-                            {/* BOTÓN CERRAR (Global) */}
-                            <button
-                                onClick={() => setModalIndex(null)}
-                                className="absolute top-4 right-4 z-50 bg-black/50 text-white w-10 h-10 rounded-full flex items-center justify-center text-xl backdrop-blur-sm"
-                            >
-                                &times;
-                            </button>
+                            {/* Botón Cerrar Global */}
+                            <button onClick={() => setModalIndex(null)} className="absolute top-4 right-4 z-50 bg-black/50 text-white w-10 h-10 rounded-full flex items-center justify-center text-xl backdrop-blur-sm hover:bg-red-500 transition">&times;</button>
 
-                            {/* NAVEGACIÓN (Solo Desktop) */}
+                            {/* Navegación Desktop */}
                             <button className="hidden md:block absolute left-4 text-white text-5xl hover:bg-white/10 rounded-full p-2" onClick={(e) => { e.stopPropagation(); setModalIndex(prev => (prev - 1 + images.length) % images.length); }}>&#8249;</button>
                             <button className="hidden md:block absolute right-4 text-white text-5xl hover:bg-white/10 rounded-full p-2" onClick={(e) => { e.stopPropagation(); setModalIndex(prev => (prev + 1) % images.length); }}>&#8250;</button>
 
-                            {/* --- BARRA INFERIOR MÓVIL (Solo visible si el chat está cerrado) --- */}
+                            {/* Barra Inferior Móvil (Visible solo si chat cerrado) */}
                             {!isSheetOpen && (
-                                <div className="md:hidden absolute bottom-0 left-0 w-full p-6 pb-8 bg-gradient-to-t from-black via-black/80 to-transparent flex justify-between items-end z-40">
+                                <div className="md:hidden absolute bottom-0 left-0 w-full p-6 pb-10 bg-gradient-to-t from-black via-black/80 to-transparent flex justify-between items-end z-40">
                                     <div className="flex gap-6">
                                         <button onClick={(e) => { e.stopPropagation(); toggleEditRequest(modalImage.id); }} className="flex flex-col items-center gap-1">
-                                            <div className={`p-2 rounded-full ${modalImage.is_requested ? 'bg-green-500 text-white' : 'bg-white/20 text-white'}`}>✨</div>
+                                            <div className={`p-2 rounded-full transition ${modalImage.is_requested ? 'bg-green-500 text-white' : 'bg-white/20 text-white'}`}>✨</div>
                                             <span className="text-[10px] text-white">Editar</span>
                                         </button>
                                         <button onClick={(e) => { e.stopPropagation(); toggleDeleteRequest(modalImage.id); }} className="flex flex-col items-center gap-1">
-                                            <div className={`p-2 rounded-full ${modalImage.is_deletion_requested ? 'bg-red-500 text-white' : 'bg-white/20 text-white'}`}>🗑️</div>
+                                            <div className={`p-2 rounded-full transition ${modalImage.is_deletion_requested ? 'bg-red-500 text-white' : 'bg-white/20 text-white'}`}>🗑️</div>
                                             <span className="text-[10px] text-white">Borrar</span>
                                         </button>
                                     </div>
-
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setIsSheetOpen(true); }}
-                                        className="flex items-center gap-2 bg-white text-black px-6 py-3 rounded-full font-bold text-sm shadow-xl active:scale-95 transition"
-                                    >
+                                    <button onClick={(e) => { e.stopPropagation(); setIsSheetOpen(true); }} className="flex items-center gap-2 bg-white text-black px-6 py-3 rounded-full font-bold text-sm shadow-xl active:scale-95 transition">
                                         💬 Comentar
                                     </button>
                                 </div>
                             )}
                         </div>
 
-                        {/* --- 2. CAPA DE CHAT (BOTTOM SHEET) --- */}
+                        {/* 2. SECCIÓN CHAT (Bottom Sheet Móvil / Sidebar Desktop) */}
                         <div
                             className={`
                                 fixed bottom-0 left-0 w-full bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.3)]
@@ -316,28 +314,28 @@ export default function XVGallery() {
                                 md:relative md:w-1/3 md:rounded-none md:shadow-none md:translate-y-0
                                 ${isSheetOpen ? 'translate-y-0 h-[60dvh]' : 'translate-y-full h-0 md:h-full'}
                             `}
-                            onClick={(e) => e.stopPropagation()} // Evitar clicks fantasma
+                            onClick={(e) => e.stopPropagation()}
                         >
-                            {/* MANIJA PARA CERRAR (Móvil) */}
-                            <div className="md:hidden w-full h-10 flex items-center justify-center cursor-pointer border-b" onClick={() => setIsSheetOpen(false)}>
+                            {/* Manija Móvil */}
+                            <div className="md:hidden w-full h-10 flex items-center justify-center cursor-pointer border-b active:bg-gray-50 rounded-t-3xl" onClick={() => setIsSheetOpen(false)}>
                                 <div className="w-12 h-1.5 bg-gray-300 rounded-full"></div>
                             </div>
 
-                            {/* HEADER ESCRITORIO */}
+                            {/* Header Desktop */}
                             <div className="hidden md:flex p-4 border-b justify-between items-center bg-gray-50">
                                 <h3 className="font-bold">Comentarios</h3>
                                 <div className="flex gap-2">
-                                    <button onClick={() => toggleEditRequest(modalImage.id)} className={`p-2 rounded-full ${modalImage.is_requested ? 'bg-green-100 text-green-600' : 'bg-gray-100'}`}>✨</button>
-                                    <button onClick={() => toggleDeleteRequest(modalImage.id)} className={`p-2 rounded-full ${modalImage.is_deletion_requested ? 'bg-red-100 text-red-600' : 'bg-gray-100'}`}>🗑️</button>
+                                    <button onClick={() => toggleEditRequest(modalImage.id)} className={`p-2 rounded-full transition ${modalImage.is_requested ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`} title="Editar">✨</button>
+                                    <button onClick={() => toggleDeleteRequest(modalImage.id)} className={`p-2 rounded-full transition ${modalImage.is_deletion_requested ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-400'}`} title="Borrar">🗑️</button>
                                 </div>
                             </div>
 
-                            {/* LISTA COMENTARIOS (Scrollable) */}
+                            {/* Lista Comentarios */}
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
                                 {comments.length === 0 ? (
                                     <div className="h-full flex flex-col items-center justify-center text-gray-400 opacity-60">
                                         <span className="text-3xl">💬</span>
-                                        <p className="text-sm mt-2">Sin comentarios aún</p>
+                                        <p className="text-sm mt-2">Sé el primero en comentar</p>
                                     </div>
                                 ) : (
                                     comments.map((c, i) => (
@@ -355,28 +353,14 @@ export default function XVGallery() {
                                 <div ref={commentsEndRef} />
                             </div>
 
-                            {/* INPUT FIJO AL FONDO */}
+                            {/* Input Fijo */}
                             <form onSubmit={postComment} className="p-3 border-t bg-gray-50 pb-safe">
                                 {authorName === "" && (
-                                    <input
-                                        type="text"
-                                        placeholder="Tu nombre..."
-                                        className="text-xs text-gray-500 px-2 py-1 bg-transparent focus:outline-none w-full"
-                                        onChange={e => setAuthorName(e.target.value)}
-                                    />
+                                    <input type="text" placeholder="Tu nombre..." className="text-xs text-gray-500 px-2 py-1 bg-transparent focus:outline-none w-full" onChange={e => setAuthorName(e.target.value)} />
                                 )}
-                                <div className="flex gap-2 items-center bg-white rounded-full px-4 py-2 border focus-within:border-pink-500 shadow-sm">
-                                    <input
-                                        type="text"
-                                        placeholder="Escribe un comentario..."
-                                        className="bg-transparent w-full text-sm focus:outline-none"
-                                        value={newComment}
-                                        onChange={e => setNewComment(e.target.value)}
-                                        onFocus={() => setAuthorName(authorName || "Invitado")}
-                                    />
-                                    <button type="submit" disabled={!newComment.trim()} className="text-pink-600 font-bold text-sm disabled:opacity-30">
-                                        Enviar
-                                    </button>
+                                <div className="flex gap-2 items-center bg-white rounded-full px-4 py-2 border focus-within:border-pink-500 shadow-sm transition">
+                                    <input type="text" placeholder="Escribe un comentario..." className="bg-transparent w-full text-sm focus:outline-none" value={newComment} onChange={e => setNewComment(e.target.value)} onFocus={() => setAuthorName(authorName || "Invitado")} />
+                                    <button type="submit" disabled={!newComment.trim()} className="text-pink-600 font-bold text-sm disabled:opacity-30 hover:scale-105 transition">Enviar</button>
                                 </div>
                             </form>
                         </div>
