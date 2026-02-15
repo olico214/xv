@@ -7,7 +7,7 @@ export default function HeroBanner({ images }) {
     const [fade, setFade] = useState(true);
 
     // Solo usamos las primeras 5 fotos para el banner para no cargar de más
-    const bannerImages = images.slice(0, 5);
+    const bannerImages = images.slice(20, 10);
 
     useEffect(() => {
         if (bannerImages.length <= 1) return;
@@ -18,7 +18,7 @@ export default function HeroBanner({ images }) {
                 setCurrentIndex((prev) => (prev + 1) % bannerImages.length);
                 setFade(true); // Fade in
             }, 500); // Tiempo que tarda la transición CSS
-        }, 5000); // Cambia cada 5 segundos
+        }, 3000); // Cambia cada 5 segundos
 
         return () => clearInterval(interval);
     }, [bannerImages.length]);
