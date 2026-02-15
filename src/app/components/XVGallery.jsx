@@ -119,15 +119,44 @@ export default function XVGallery() {
         const content = await zip.generateAsync({ type: "blob" });
         saveAs(content, "mis-fotos-xv.zip");
     };
-
+    const [isUploading, setIsUploading] = useState(false); // Nuevo estado de carga
     const handleUpload = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
+
+        // Feedback visual inmediato
+        setIsUploading(true);
+
         const formData = new FormData();
-        formData.append('image', file);
+
+        // Recorremos los archivos seleccionados y los agregamos al FormData
+        // Nota: Usamos 'images' (plural) para coincidir con el backend
+        for (let i = 0; i < files.length; i++) {
+            formData.append('images', files[i]);
+        }
+
+        // Agregamos la categoría
         formData.append('category_id', selectedCategory === 'all' ? 1 : selectedCategory);
-        await fetch(`${API_URL}/upload`, { method: 'POST', body: formData });
-        fetchImages();
+
+        try {
+            const res = await fetch(`${API_URL}/upload`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (res.ok) {
+                alert("¡Fotos subidas con éxito! 🚀");
+                e.target.value = null; // Limpiar el input
+                fetchImages(); // Recargar la galería
+            } else {
+                alert("Hubo un error al subir las fotos.");
+            }
+        } catch (error) {
+            console.error(error);
+            alert("Error de conexión.");
+        } finally {
+            setIsUploading(false); // Quitar spinner
+        }
     };
 
     const handleKeyDown = useCallback((e) => {
@@ -160,8 +189,30 @@ export default function XVGallery() {
                     </div>
 
                     <div className="flex gap-3 w-full md:w-auto">
-                        <label className="flex-1 md:flex-none text-center cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700 transition">
-                            Subir 📷 <input type="file" className="hidden" onChange={handleUpload} accept="image/*" />
+                        <label className={`cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-gray-700 transition flex items-center gap-2 ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+
+                            {isUploading ? (
+                                <>
+                                    <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Subiendo...
+                                </>
+                            ) : (
+                                <>
+                                    Subir Fotos 📷
+                                    {/* AGREGADO EL ATRIBUTO MULTIPLE AQUÍ ABAJO */}
+                                    <input
+                                        type="file"
+                                        className="hidden"
+                                        onChange={handleUpload}
+                                        accept="image/*"
+                                        multiple
+                                        disabled={isUploading}
+                                    />
+                                </>
+                            )}
                         </label>
                         <button onClick={() => setIsSelectionMode(!isSelectionMode)} className={`flex-1 md:flex-none px-4 py-2 border rounded-lg text-sm font-bold transition ${isSelectionMode ? 'bg-pink-50 border-pink-500 text-pink-700' : 'bg-white'}`}>
                             {isSelectionMode ? 'Cancelar' : 'Seleccionar'}

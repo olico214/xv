@@ -7,7 +7,7 @@ export default function HeroBanner({ images }) {
     const [fade, setFade] = useState(true);
 
     // Solo usamos las primeras 5 fotos para el banner para no cargar de más
-    const bannerImages = images.slice(20, 10);
+    const bannerImages = images.slice(0, 10);
 
     useEffect(() => {
         if (bannerImages.length <= 1) return;
